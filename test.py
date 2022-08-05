@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 from resnet import resnet18, resnet34, resnet50, wide_resnet50_2
 from de_resnet import de_resnet18, de_resnet50, de_wide_resnet50_2
 from dataset import MVTecDataset
+from dataset import SynapseDataset
 from torch.nn import functional as F
 from sklearn.metrics import roc_auc_score
 import cv2
@@ -75,21 +76,20 @@ def evaluation(encoder, bn, decoder, dataloader,device,_class_=None):
     pr_list_sp = []
     aupro_list = []
     with torch.no_grad():
-        for img, gt, label, _ in dataloader:
+        for img, label, _ in dataloader:
 
             img = img.to(device)
             inputs = encoder(img)
             outputs = decoder(bn(inputs))
             anomaly_map, _ = cal_anomaly_map(inputs, outputs, img.shape[-1], amap_mode='a')
             anomaly_map = gaussian_filter(anomaly_map, sigma=4)
-            gt[gt > 0.5] = 1
-            gt[gt <= 0.5] = 0
-            if label.item()!=0:
-                aupro_list.append(compute_pro(gt.squeeze(0).cpu().numpy().astype(int),
-                                              anomaly_map[np.newaxis,:,:]))
-            gt_list_px.extend(gt.cpu().numpy().astype(int).ravel())
-            pr_list_px.extend(anomaly_map.ravel())
-            gt_list_sp.append(np.max(gt.cpu().numpy().astype(int)))
+            # if label.item()!=0:
+            #     aupro_list.append(compute_pro(gt.squeeze(0).cpu().numpy().astype(int),
+            #                                   anomaly_map[np.newaxis,:,:]))
+            # gt_list_px.extend(gt.cpu().numpy().astype(int).ravel())
+            # pr_list_px.extend(anomaly_map.ravel())
+            # gt_list_sp.append(np.max(gt.cpu().numpy().astype(int)))
+            gt_list_sp.extend(label.cpu().data.numpy())
             pr_list_sp.append(np.max(anomaly_map))
 
         #ano_score = (pr_list_sp - np.min(pr_list_sp)) / (np.max(pr_list_sp) - np.min(pr_list_sp))
@@ -102,9 +102,9 @@ def evaluation(encoder, bn, decoder, dataloader,device,_class_=None):
         #    pickle.dump(vis_data, f, pickle.HIGHEST_PROTOCOL)
 
 
-        auroc_px = round(roc_auc_score(gt_list_px, pr_list_px), 3)
+        # auroc_px = round(roc_auc_score(gt_list_px, pr_list_px), 3)
         auroc_sp = round(roc_auc_score(gt_list_sp, pr_list_sp), 3)
-    return auroc_px, auroc_sp, round(np.mean(aupro_list),3)
+    return auroc_sp 
 
 def test(_class_):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -139,10 +139,10 @@ def visualization(_class_):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(device)
 
-    data_transform, gt_transform = get_data_transforms(256, 256)
-    test_path = '../mvtec/' + _class_
-    ckp_path = './checkpoints/' + 'rm_1105_wres50_ff_mm_'+_class_+'.pth'
-    test_data = MVTecDataset(root=test_path, transform=data_transform, gt_transform=gt_transform, phase="test")
+    data_transform, gt_transform = get_data_transforms(512,512)
+    test_path = '/home/synapse/' + _class_
+    ckp_path = '/home/synapse/RD4AD/checkpoints/' + 'rm_1105_wres50_ff_mm_'+_class_+'.pth'
+    test_data = SynapseDataset(root=test_path, transform=data_transform, gt_transform=gt_transform, phase="test")
     test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
 
     encoder, bn = wide_resnet50_2(pretrained=True)
@@ -395,7 +395,7 @@ def detection(encoder, bn, decoder, dataloader,device,_class_):
     prmax_list_sp = []
     prmean_list_sp = []
     with torch.no_grad():
-        for img, label in dataloader:
+        for img, label, _ in dataloader:
 
             img = img.to(device)
             if img.shape[1] == 1:

@@ -1,8 +1,3 @@
-# This is a sample Python script.
-
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
-
 import torch
 from dataset import get_data_transforms
 from torchvision.datasets import ImageFolder
@@ -13,9 +8,10 @@ from torch.utils.data import DataLoader
 from resnet import resnet18, resnet34, resnet50, wide_resnet50_2
 from de_resnet import de_resnet18, de_resnet34, de_wide_resnet50_2, de_resnet50
 from dataset import MVTecDataset
+from dataset import SynapseDataset
 import torch.backends.cudnn as cudnn
 import argparse
-from test import evaluation, visualization, test
+from test import evaluation, visualization, test, detection
 from torch.nn import functional as F
 
 def count_parameters(model):
@@ -62,31 +58,33 @@ def train(_class_):
     print(_class_)
     epochs = 200
     learning_rate = 0.005
-    batch_size = 16
-    image_size = 256
+    batch_size = 4
+    image_size = 512
         
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(device)
 
+    os.environ['CUDA_VISIBLE_DEVICES'] = "3"
+
     data_transform, gt_transform = get_data_transforms(image_size, image_size)
-    train_path = './mvtec/' + _class_ + '/train'
-    test_path = './mvtec/' + _class_
-    ckp_path = './checkpoints/' + 'wres50_'+_class_+'.pth'
+    train_path = '/home/synapse/' + _class_ + '/Train'
+    test_path = '/home/synapse/' + _class_
+    ckp_path = '/home/synapse/RD4AD/checkpoints/' + 'wres50_'+_class_+'.pth'
     train_data = ImageFolder(root=train_path, transform=data_transform)
-    test_data = MVTecDataset(root=test_path, transform=data_transform, gt_transform=gt_transform, phase="test")
+    test_data = SynapseDataset(root=test_path, transform=data_transform, phase="Test")
     train_dataloader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
     test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
 
-    encoder, bn = wide_resnet50_2(pretrained=True)
+    encoder, bn = resnet50(pretrained=True)
     encoder = encoder.to(device)
     bn = bn.to(device)
     encoder.eval()
-    decoder = de_wide_resnet50_2(pretrained=False)
+    decoder = de_resnet50(pretrained=False)
     decoder = decoder.to(device)
 
     optimizer = torch.optim.Adam(list(decoder.parameters())+list(bn.parameters()), lr=learning_rate, betas=(0.5,0.999))
 
-
+    save_best_weights = 0
     for epoch in range(epochs):
         bn.train()
         decoder.train()
@@ -101,21 +99,19 @@ def train(_class_):
             optimizer.step()
             loss_list.append(loss.item())
         print('epoch [{}/{}], loss:{:.4f}'.format(epoch + 1, epochs, np.mean(loss_list)))
-        if (epoch + 1) % 10 == 0:
-            auroc_px, auroc_sp, aupro_px = evaluation(encoder, bn, decoder, test_dataloader, device)
-            print('Pixel Auroc:{:.3f}, Sample Auroc{:.3f}, Pixel Aupro{:.3}'.format(auroc_px, auroc_sp, aupro_px))
+        auroc_sp_max = evaluation(encoder, bn, decoder, test_dataloader, device, _class_)
+        print('AUROC {:.3f}'.format(auroc_sp_max))
+        if save_best_weights < auroc_sp_max:
             torch.save({'bn': bn.state_dict(),
                         'decoder': decoder.state_dict()}, ckp_path)
-    return auroc_px, auroc_sp, aupro_px
+    return auroc_sp_max
 
 
 
 
 if __name__ == '__main__':
-
     setup_seed(111)
-    item_list = ['carpet', 'bottle', 'hazelnut', 'leather', 'cable', 'capsule', 'grid', 'pill',
-                 'transistor', 'metal_nut', 'screw','toothbrush', 'zipper', 'tile', 'wood']
+    item_list = ['SMT_220802']
     for i in item_list:
         train(i)
 
