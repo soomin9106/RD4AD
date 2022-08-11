@@ -1,3 +1,5 @@
+import random
+import time
 import torch
 from dataset import get_data_transforms, load_data
 from torchvision.datasets import ImageFolder
@@ -76,6 +78,7 @@ def evaluation(encoder, bn, decoder, dataloader,device,_class_=None):
     pr_list_sp = []
     aupro_list = []
     with torch.no_grad():
+        start_time = time.time()
         for img, label, _ in dataloader:
 
             img = img.to(device)
@@ -91,7 +94,7 @@ def evaluation(encoder, bn, decoder, dataloader,device,_class_=None):
             # gt_list_sp.append(np.max(gt.cpu().numpy().astype(int)))
             gt_list_sp.extend(label.cpu().data.numpy())
             pr_list_sp.append(np.max(anomaly_map))
-
+        print('Test Time: {}'.format(time.time()- start_time))
         #ano_score = (pr_list_sp - np.min(pr_list_sp)) / (np.max(pr_list_sp) - np.min(pr_list_sp))
         #vis_data = {}
         #vis_data['Anomaly Score'] = ano_score
@@ -100,10 +103,29 @@ def evaluation(encoder, bn, decoder, dataloader,device,_class_=None):
         # np.save('vis.npy',vis_data)
         #with open('{}_vis.pkl'.format(_class_), 'wb') as f:
         #    pickle.dump(vis_data, f, pickle.HIGHEST_PROTOCOL)
-
-
         # auroc_px = round(roc_auc_score(gt_list_px, pr_list_px), 3)
+
         auroc_sp = round(roc_auc_score(gt_list_sp, pr_list_sp), 3)
+        anomal = gt_list_sp.count(1)
+        normal = gt_list_sp.count(0)
+        anomaly_min = 10000
+        new_anomal_list = []
+        overKill = 0
+        underKill = 0
+        for i in range(len(gt_list_sp)):
+            if gt_list_sp[i] == 1:
+                new_anomal_list.append(pr_list_sp[i])
+        new_anomal_list = sorted(new_anomal_list)
+
+        anomaly_min = new_anomal_list[10] # 숫자 : 미검 개수
+        for i in range(len(gt_list_sp)):
+            if gt_list_sp[i] == 0 and pr_list_sp[i] > anomaly_min:
+                overKill += 1
+        
+        for i in range(len(gt_list_sp)):
+            if gt_list_sp[i] == 1 and pr_list_sp[i] < anomaly_min:
+                underKill += 1
+        print("Best AUROC: {}, abnormal: {}, normal: {},  Minimum anomaly Score: {}, overKill: {} underKill: {}".format(auroc_sp, anomal, normal, anomaly_min, overKill, underKill))
     return auroc_sp 
 
 def test(_class_):
@@ -111,16 +133,17 @@ def test(_class_):
     print(device)
     print(_class_)
 
-    data_transform, gt_transform = get_data_transforms(256, 256)
-    test_path = '../mvtec/' + _class_
-    ckp_path = './checkpoints/' + 'rm_1105_wres50_ff_mm_' + _class_ + '.pth'
-    test_data = MVTecDataset(root=test_path, transform=data_transform, gt_transform=gt_transform, phase="test")
+    data_transform, gt_transform = get_data_transforms(512, 512)
+    test_path = '/home/synapse/' + _class_
+    ckp_path = '/home/synapse/RD4AD/checkpoints/' + 'wres50_' + _class_ + '.pth'
+    test_data = SynapseDataset(root=test_path, transform=data_transform, phase="Test")
     test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
     encoder, bn = wide_resnet50_2(pretrained=True)
     encoder = encoder.to(device)
     bn = bn.to(device)
     encoder.eval()
     decoder = de_wide_resnet50_2(pretrained=False)
+    decoder = torch.nn.DataParallel(decoder)
     decoder = decoder.to(device)
     ckp = torch.load(ckp_path)
     for k, v in list(ckp['bn'].items()):
@@ -128,9 +151,8 @@ def test(_class_):
             ckp['bn'].pop(k)
     decoder.load_state_dict(ckp['decoder'])
     bn.load_state_dict(ckp['bn'])
-    auroc_px, auroc_sp, aupro_px = evaluation(encoder, bn, decoder, test_dataloader, device,_class_)
-    print(_class_,':',auroc_px,',',auroc_sp,',',aupro_px)
-    return auroc_px
+    auroc_sp = evaluation(encoder, bn, decoder, test_dataloader, device,_class_)
+    return auroc_sp
 
 import os
 
@@ -141,8 +163,8 @@ def visualization(_class_):
 
     data_transform, gt_transform = get_data_transforms(512,512)
     test_path = '/home/synapse/' + _class_
-    ckp_path = '/home/synapse/RD4AD/checkpoints/' + 'rm_1105_wres50_ff_mm_'+_class_+'.pth'
-    test_data = SynapseDataset(root=test_path, transform=data_transform, gt_transform=gt_transform, phase="test")
+    ckp_path = '/home/synapse/RD4AD/checkpoints/' + 'wres50_'+_class_+'.pth'
+    test_data = SynapseDataset(root=test_path, transform=data_transform, phase="Test")
     test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
 
     encoder, bn = wide_resnet50_2(pretrained=True)
@@ -151,6 +173,7 @@ def visualization(_class_):
 
     encoder.eval()
     decoder = de_wide_resnet50_2(pretrained=False)
+    decoder = torch.nn.DataParallel(decoder)
     decoder = decoder.to(device)
     ckp = torch.load(ckp_path)
     for k, v in list(ckp['bn'].items()):
@@ -161,7 +184,7 @@ def visualization(_class_):
 
     count = 0
     with torch.no_grad():
-        for img, gt, label, _ in test_dataloader:
+        for img, label, _ in test_dataloader:
             if (label.item() == 0):
                 continue
             #if count <= 10:
@@ -197,10 +220,10 @@ def visualization(_class_):
             #cv2.imwrite('./results_all/'+_class_+'/'+str(count)+'_'+'ad.png', ano_map)
             plt.imshow(ano_map)
             plt.axis('off')
-            #plt.savefig('ad.png')
+            plt.savefig('/home/synapse/RD4AD/viz/{}.png'.format(random.random()))
             plt.show()
 
-            gt = gt.cpu().numpy().astype(int)[0][0]*255
+            #gt = gt.cpu().numpy().astype(int)[0][0]*255
             #cv2.imwrite('./results/'+_class_+'_'+str(count)+'_'+'gt.png', gt)
 
             #b, c, h, w = inputs[2].shape
@@ -421,3 +444,6 @@ def detection(encoder, bn, decoder, dataloader,device,_class_):
         auroc_sp_max = round(roc_auc_score(gt_list_sp, prmax_list_sp), 4)
         auroc_sp_mean = round(roc_auc_score(gt_list_sp, prmean_list_sp), 4)
     return auroc_sp_max, auroc_sp_mean
+
+if __name__=='__main__':
+    visualization("SMT_220802")

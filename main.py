@@ -64,22 +64,23 @@ def train(_class_):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(device)
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = "3"
+    os.environ['CUDA_VISIBLE_DEVICES'] = "2, 3"
 
     data_transform, gt_transform = get_data_transforms(image_size, image_size)
     train_path = '/home/synapse/' + _class_ + '/Train'
     test_path = '/home/synapse/' + _class_
-    ckp_path = '/home/synapse/RD4AD/checkpoints/' + 'wres50_'+_class_+'.pth'
+    ckp_path = '/home/synapse/RD4AD/checkpoints/' + 'wres50_'+_class_+'_ver2'+'.pth'
     train_data = ImageFolder(root=train_path, transform=data_transform)
     test_data = SynapseDataset(root=test_path, transform=data_transform, phase="Test")
     train_dataloader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
     test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
 
-    encoder, bn = resnet50(pretrained=True)
+    encoder, bn = wide_resnet50_2(pretrained=True)
     encoder = encoder.to(device)
     bn = bn.to(device)
     encoder.eval()
-    decoder = de_resnet50(pretrained=False)
+    decoder = de_wide_resnet50_2(pretrained=False)
+    decoder = torch.nn.DataParallel(decoder)
     decoder = decoder.to(device)
 
     optimizer = torch.optim.Adam(list(decoder.parameters())+list(bn.parameters()), lr=learning_rate, betas=(0.5,0.999))
@@ -102,6 +103,7 @@ def train(_class_):
         auroc_sp_max = evaluation(encoder, bn, decoder, test_dataloader, device, _class_)
         print('AUROC {:.3f}'.format(auroc_sp_max))
         if save_best_weights < auroc_sp_max:
+            save_best_weights = auroc_sp_max
             torch.save({'bn': bn.state_dict(),
                         'decoder': decoder.state_dict()}, ckp_path)
     return auroc_sp_max
